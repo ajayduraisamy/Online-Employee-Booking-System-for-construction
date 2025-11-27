@@ -5,7 +5,8 @@ from flask_cors import CORS
 import mysql.connector
 import bcrypt
 from functools import wraps
-
+from dotenv import load_dotenv
+load_dotenv()
 app = Flask(__name__)
 
 
@@ -478,17 +479,81 @@ def delete_project(project_id):
 # -------------------------
 # ASSIGNMENTS CRUD (Manager / Admin)
 # -------------------------
-@app.route("/api/assignments", methods=["POST"])
 
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+
+print(SENDER_EMAIL)
+print(EMAIL_PASSWORD)
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+def send_assignment_email(to_email, project_name, employee_name, role, start_date, end_date):
+    sender = SENDER_EMAIL
+    password = EMAIL_PASSWORD
+
+    msg = MIMEMultipart()
+    msg["From"] = sender
+    msg["To"] = to_email
+    msg["Subject"] = f"New Assignment: {project_name}"
+
+    html = f"""
+    <h2>New Project Assignment</h2>
+    <p>Hi <b>{employee_name}</b>,</p>
+    <p>You have been assigned to a new project.</p>
+
+    <h3>Assignment Details:</h3>
+    <ul>
+        <li><b>Project:</b> {project_name}</li>
+        <li><b>Role:</b> {role}</li>
+        <li><b>Start Date:</b> {start_date or "—"}</li>
+        <li><b>End Date:</b> {end_date or "—"}</li>
+    </ul>
+
+    <p>Please check your dashboard for more details.</p>
+    <br/>
+    <p>Regards,<br/>Team Admin</p>
+    """
+
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(sender, password)
+        server.sendmail(sender, to_email, msg.as_string())
+        server.quit()
+        print("Email sent successfully")
+    except Exception as e:
+        print("Email sending failed:", e)
+
+@app.route("/api/assignments", methods=["POST"])
 def create_assignment():
     data = request.json or {}
-    required = ["project_id","employee_id"]
+    required = ["project_id", "employee_id"]
+
     if not all(k in data and data[k] for k in required):
         return jsonify({"msg": "Missing fields"}), 400
+
     try:
+        # Fetch employee details
+        emp = fetchone("SELECT email, name FROM users WHERE id=%s", (data["employee_id"],))
+        if not emp:
+            return jsonify({"msg": "Employee not found"}), 404
+
+        employee_email = emp["email"]
+        employee_name = emp["name"]
+
+        # Fetch project name
+        proj = fetchone("SELECT project_name FROM projects WHERE id=%s", (data["project_id"],))
+        project_name = proj["project_name"] if proj else "Unknown Project"
+
+        # Insert Assignment
         aid = execute("""
-            INSERT INTO assignments (project_id,employee_id,assigned_by,role_desc,start_date,end_date,status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO assignments (project_id, employee_id, assigned_by, role_desc, start_date, end_date, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             data["project_id"],
             data["employee_id"],
@@ -498,9 +563,22 @@ def create_assignment():
             data.get("end_date"),
             data.get("status") or "assigned"
         ))
+
+        # SEND EMAIL
+        send_assignment_email(
+            employee_email,
+            project_name,
+            employee_name,
+            data.get("role_desc") or "Not Specified",
+            data.get("start_date"),
+            data.get("end_date")
+        )
+
     except Exception as e:
         return jsonify({"msg": "Create assignment failed", "error": str(e)}), 500
-    return jsonify({"msg": "Assigned", "assignment_id": aid})
+
+    return jsonify({"msg": "Assigned & Email Sent", "assignment_id": aid})
+
 
 @app.route("/api/assignments", methods=["GET"])
 

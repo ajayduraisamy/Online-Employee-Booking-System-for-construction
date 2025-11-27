@@ -61,9 +61,9 @@ export default function Sidebar({ role }: SidebarProps) {
     const rawMenus: Record<string, { name: string; link: string }[]> = {
         admin: [
             { name: "Dashboard", link: "/dashboard/admin" },
-            { name: "Users", link: "/dashboard/admin/users" },
-            { name: "Projects", link: "/dashboard/admin/projects" },
             { name: "Bookings", link: "/dashboard/admin/bookings" },
+            { name: "Users", link: "/dashboard/admin/users" },
+            { name: "Projects", link: "/dashboard/admin/projects" },            
             { name: "Assignments", link: "/dashboard/admin/assignments" }
         ],
         manager: [
