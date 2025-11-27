@@ -1,4 +1,4 @@
-# app.py
+
 import os
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
@@ -8,9 +8,7 @@ from functools import wraps
 
 app = Flask(__name__)
 
-# -------------------------
-# CONFIG
-# -------------------------
+
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super-secret-key-2025')
 
 def get_db_connection():
@@ -21,36 +19,9 @@ def get_db_connection():
         database="Emp_db"
     )
 
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False
-
 CORS(app, supports_credentials=True, origins=["http://localhost:5173"])
 
-# -------------------------
-# AUTH HELPERS
-# -------------------------
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if "user_id" not in session:
-            return jsonify({"msg": "Unauthorized"}), 401
-        return f(*args, **kwargs)
-    return decorated
 
-def require_role(*roles):
-    def decorator(f):
-        @wraps(f)
-        def wrapper(*a, **kw):
-            if "role" not in session or session["role"] not in roles:
-                return jsonify({"msg": "Forbidden"}), 403
-            return f(*a, **kw)
-        return wrapper
-    return decorator
-
-# -------------------------
-# AUTO TABLE CREATION
-# -------------------------
 def create_tables():
     db = get_db_connection()
     cur = db.cursor()
@@ -205,46 +176,51 @@ def register():
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.json or {}
-    if not data.get("email") or not data.get("password"):
+
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+
+    if not email or not password:
         return jsonify({"msg": "Email and password required"}), 400
 
-    user = fetchone("SELECT * FROM users WHERE email=%s", (data["email"],))
+    user = fetchone("SELECT * FROM users WHERE email=%s", (email,))
     if not user:
         return jsonify({"msg": "Invalid email"}), 400
 
-    if not bcrypt.checkpw(data["password"].encode(), user["password"].encode()):
+    if not bcrypt.checkpw(password.encode(), user["password"].encode()):
         return jsonify({"msg": "Wrong password"}), 400
 
-    # set minimal session
+    # 🔥 SET SESSION HERE (MISSING IN YOUR CODE)
     session["user_id"] = user["id"]
     session["role"] = user["role"]
 
-    # remove password before returning
+    # Remove password before sending
     user.pop("password", None)
-    return jsonify({"msg": "Login OK", "user": user})
+
+    return jsonify({
+        "msg": "Login OK",
+        "user": user
+    })
+
 
 # -------------------------
 # LOGOUT
 # -------------------------
 @app.route("/api/logout", methods=["POST"])
-@login_required
+
 def logout():
     session.clear()
     return jsonify({"msg": "Logged out"})
 
-# -------------------------
-# ADMIN: USERS CRUD
-# -------------------------
+
 @app.route("/api/admin/users", methods=["GET"])
-@login_required
-@require_role("admin")
+
 def admin_list_users():
     rows = fetchall("SELECT id,name,email,role,phone,skills,created_at FROM users ORDER BY created_at DESC")
     return jsonify(rows)
 
 @app.route("/api/admin/user", methods=["POST"])
-@login_required
-@require_role("admin")
+
 def admin_create_user():
     data = request.json or {}
     required = ["name", "email", "password", "role"]
@@ -266,8 +242,7 @@ def admin_create_user():
     return jsonify({"msg": "User created", "id": new_id})
 
 @app.route("/api/admin/user/<int:user_id>", methods=["PUT"])
-@login_required
-@require_role("admin")
+
 def admin_update_user(user_id):
     data = request.json or {}
     # Only update provided fields (except password handled separately)
@@ -301,8 +276,7 @@ def admin_update_user(user_id):
     return jsonify({"msg": "User updated"})
 
 @app.route("/api/admin/user/<int:user_id>", methods=["DELETE"])
-@login_required
-@require_role("admin")
+
 def admin_delete_user(user_id):
     try:
         execute("DELETE FROM users WHERE id=%s", (user_id,))
@@ -314,8 +288,7 @@ def admin_delete_user(user_id):
 # EMPLOYEES LIST (for manager)
 # -------------------------
 @app.route("/api/employees", methods=["GET"])
-@login_required
-@require_role("manager","admin")
+
 def list_employees():
     rows = fetchall("SELECT id,name,email,phone,skills FROM users WHERE role='employee' ORDER BY name")
     return jsonify(rows)
@@ -324,8 +297,7 @@ def list_employees():
 # CLIENT: Create Booking
 # -------------------------
 @app.route("/api/bookings", methods=["POST"])
-@login_required
-@require_role("client")
+
 def create_booking():
     data = request.json or {}
     required = ["title", "description"]
@@ -334,19 +306,23 @@ def create_booking():
 
     try:
         execute("""
-            INSERT INTO bookings (client_id,title,description,location,required_skills,start_date,end_date,budget,status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (
-            session["user_id"],
-            data["title"],
-            data["description"],
-            data.get("location"),
-            data.get("required_skills"),
-            data.get("start_date"),
-            data.get("end_date"),
-            data.get("budget"),
-            data.get("status") or "pending"
-        ))
+    INSERT INTO bookings (
+        client_id, title, description, location,
+        required_skills, start_date, end_date, budget, status
+    )
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+""", (
+    session["user_id"],
+    data["title"],
+    data["description"],
+    data.get("location"),
+    data.get("required_skills"),
+    data.get("start_date"),
+    data.get("end_date"),
+    data.get("budget"),
+    data.get("status") or "pending"
+))
+
     except Exception as e:
         return jsonify({"msg": "Booking failed", "error": str(e)}), 500
 
@@ -354,16 +330,15 @@ def create_booking():
 
 # Client: view own bookings
 @app.route("/api/bookings/mine", methods=["GET"])
-@login_required
-@require_role("client")
+
 def client_my_bookings():
     rows = fetchall("SELECT * FROM bookings WHERE client_id=%s ORDER BY created_at DESC", (session["user_id"],))
     return jsonify(rows)
 
-# Client: update own booking
+
+
 @app.route("/api/bookings/<int:booking_id>", methods=["PUT"])
-@login_required
-@require_role("client")
+
 def client_update_booking(booking_id):
     data = request.json or {}
     booking = fetchone("SELECT * FROM bookings WHERE id=%s AND client_id=%s", (booking_id, session["user_id"]))
@@ -390,8 +365,7 @@ def client_update_booking(booking_id):
 
 # Client: delete own booking
 @app.route("/api/bookings/<int:booking_id>", methods=["DELETE"])
-@login_required
-@require_role("client")
+
 def client_delete_booking(booking_id):
     booking = fetchone("SELECT * FROM bookings WHERE id=%s AND client_id=%s", (booking_id, session["user_id"]))
     if not booking:
@@ -406,8 +380,7 @@ def client_delete_booking(booking_id):
 # MANAGER: View Bookings (all or filtered)
 # -------------------------
 @app.route("/api/bookings", methods=["GET"])
-@login_required
-@require_role("manager","admin")
+
 def get_bookings():
     # optional query params: status, unassigned_only
     status = request.args.get("status")
@@ -429,8 +402,7 @@ def get_bookings():
 # MANAGER: Projects CRUD
 # -------------------------
 @app.route("/api/projects", methods=["POST"])
-@login_required
-@require_role("manager","admin")
+
 def create_project():
     data = request.json or {}
     required = ["project_name","booking_id"]
@@ -454,8 +426,7 @@ def create_project():
     return jsonify({"msg": "Project created", "project_id": pid})
 
 @app.route("/api/projects", methods=["GET"])
-@login_required
-@require_role("manager","admin","employee")
+
 def list_projects():
     # employees can optionally see projects they're assigned to
     if session["role"] == "employee":
@@ -470,8 +441,7 @@ def list_projects():
     return jsonify(rows)
 
 @app.route("/api/projects/<int:project_id>", methods=["PUT"])
-@login_required
-@require_role("manager","admin")
+
 def update_project(project_id):
     data = request.json or {}
     project = fetchone("SELECT * FROM projects WHERE id=%s", (project_id,))
@@ -494,8 +464,7 @@ def update_project(project_id):
     return jsonify({"msg": "Project updated"})
 
 @app.route("/api/projects/<int:project_id>", methods=["DELETE"])
-@login_required
-@require_role("manager","admin")
+
 def delete_project(project_id):
     if not fetchone("SELECT id FROM projects WHERE id=%s", (project_id,)):
         return jsonify({"msg": "Project not found"}), 404
@@ -510,8 +479,7 @@ def delete_project(project_id):
 # ASSIGNMENTS CRUD (Manager / Admin)
 # -------------------------
 @app.route("/api/assignments", methods=["POST"])
-@login_required
-@require_role("manager","admin")
+
 def create_assignment():
     data = request.json or {}
     required = ["project_id","employee_id"]
@@ -535,8 +503,7 @@ def create_assignment():
     return jsonify({"msg": "Assigned", "assignment_id": aid})
 
 @app.route("/api/assignments", methods=["GET"])
-@login_required
-@require_role("manager","admin","employee")
+
 def list_assignments():
     if session["role"] == "employee":
         rows = fetchall("SELECT * FROM assignments WHERE employee_id=%s ORDER BY created_at DESC", (session["user_id"],))
@@ -545,8 +512,7 @@ def list_assignments():
     return jsonify(rows)
 
 @app.route("/api/assignments/<int:assign_id>", methods=["PUT"])
-@login_required
-@require_role("manager","admin")
+
 def update_assignment(assign_id):
     if not fetchone("SELECT id FROM assignments WHERE id=%s", (assign_id,)):
         return jsonify({"msg": "Assignment not found"}), 404
@@ -567,8 +533,7 @@ def update_assignment(assign_id):
     return jsonify({"msg": "Assignment updated"})
 
 @app.route("/api/assignments/<int:assign_id>", methods=["DELETE"])
-@login_required
-@require_role("manager","admin")
+
 def delete_assignment(assign_id):
     if not fetchone("SELECT id FROM assignments WHERE id=%s", (assign_id,)):
         return jsonify({"msg": "Assignment not found"}), 404
@@ -582,8 +547,7 @@ def delete_assignment(assign_id):
 # EMPLOYEE: Update assignment status (working/completed)
 # -------------------------
 @app.route("/api/assignments/<int:assign_id>/status", methods=["PUT"])
-@login_required
-@require_role("employee")
+
 def employee_update_status(assign_id):
     assn = fetchone("SELECT * FROM assignments WHERE id=%s AND employee_id=%s", (assign_id, session["user_id"]))
     if not assn:
@@ -602,15 +566,13 @@ def employee_update_status(assign_id):
 # ADMIN: Bookings/Projects/Assignments CRUD (convenience endpoints)
 # -------------------------
 @app.route("/api/admin/bookings", methods=["GET"])
-@login_required
-@require_role("admin")
+
 def admin_list_bookings():
     rows = fetchall("SELECT * FROM bookings ORDER BY created_at DESC")
     return jsonify(rows)
 
 @app.route("/api/admin/bookings/<int:booking_id>", methods=["DELETE"])
-@login_required
-@require_role("admin")
+
 def admin_delete_booking(booking_id):
     if not fetchone("SELECT id FROM bookings WHERE id=%s", (booking_id,)):
         return jsonify({"msg": "Booking not found"}), 404
@@ -627,37 +589,150 @@ def admin_delete_booking(booking_id):
 # DASHBOARD COUNTS (admin/manager)
 # -------------------------
 @app.route("/api/dashboard", methods=["GET"])
-@login_required
-@require_role("admin","manager")
 def dashboard():
-    total_users = fetchone("SELECT COUNT(*) as c FROM users") or {"c":0}
-    total_employees = fetchone("SELECT COUNT(*) as c FROM users WHERE role='employee'") or {"c":0}
-    total_bookings = fetchone("SELECT COUNT(*) as c FROM bookings") or {"c":0}
-    total_projects = fetchone("SELECT COUNT(*) as c FROM projects") or {"c":0}
-    pending_bookings = fetchone("SELECT COUNT(*) as c FROM bookings WHERE status='pending'") or {"c":0}
-    data = {
-        "total_users": total_users["c"],
-        "total_employees": total_employees["c"],
-        "total_bookings": total_bookings["c"],
-        "total_projects": total_projects["c"],
-        "pending_bookings": pending_bookings["c"]
-    }
-    return jsonify(data)
+    total_users = fetchone("SELECT COUNT(*) as c FROM users")["c"]
+    total_employees = fetchone("SELECT COUNT(*) as c FROM users WHERE role='employee'")["c"]
+    total_managers = fetchone("SELECT COUNT(*) as c FROM users WHERE role='manager'")["c"]
+    total_clients = fetchone("SELECT COUNT(*) as c FROM users WHERE role='client'")["c"]
 
-# -------------------------
-# UTILITY: Get current user info
-# -------------------------
-@app.route("/api/me", methods=["GET"])
-@login_required
-def me():
-    user = fetchone("SELECT id,name,email,role,phone,skills,created_at FROM users WHERE id=%s", (session["user_id"],))
-    if not user:
-        return jsonify({"msg": "User not found"}), 404
-    return jsonify(user)
+    total_bookings = fetchone("SELECT COUNT(*) as c FROM bookings")["c"]
+    pending_bookings = fetchone("SELECT COUNT(*) as c FROM bookings WHERE status='pending'")["c"]
+    approved_bookings = fetchone("SELECT COUNT(*) as c FROM bookings WHERE status='approved'")["c"]
 
-# -------------------------
-# RUN
-# -------------------------
+    total_projects = fetchone("SELECT COUNT(*) as c FROM projects")["c"]
+    active_projects = fetchone("SELECT COUNT(*) as c FROM projects WHERE status='active'")["c"]
+    completed_projects = fetchone("SELECT COUNT(*) as c FROM projects WHERE status='completed'")["c"]
+
+    total_assignments = fetchone("SELECT COUNT(*) as c FROM assignments")["c"]
+    working_assignments = fetchone("SELECT COUNT(*) as c FROM assignments WHERE status='working'")["c"]
+    completed_assignments = fetchone("SELECT COUNT(*) as c FROM assignments WHERE status='completed'")["c"]
+
+    return jsonify({
+        "users": total_users,
+        "employees": total_employees,
+        "managers": total_managers,
+        "clients": total_clients,
+
+        "bookings": total_bookings,
+        "bookings_pending": pending_bookings,
+        "bookings_approved": approved_bookings,
+
+        "projects": total_projects,
+        "projects_active": active_projects,
+        "projects_completed": completed_projects,
+
+        "assignments": total_assignments,
+        "assignments_working": working_assignments,
+        "assignments_completed": completed_assignments
+    })
+
+
+
+@app.route("/api/admin/bookings", methods=["POST"])
+
+def admin_create_booking():
+    data = request.json or {}
+
+    required = ["client_id", "title", "description"]
+    if not all(k in data and data[k] for k in required):
+        return jsonify({"msg": "Missing fields"}), 400
+
+    try:
+        execute("""
+            INSERT INTO bookings (client_id,title,description,location,required_skills,start_date,end_date,budget,status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            data["client_id"],
+            data["title"],
+            data["description"],
+            data.get("location"),
+            data.get("required_skills"),
+            data.get("start_date"),
+            data.get("end_date"),
+            data.get("budget"),
+            data.get("status") or "pending"
+        ))
+    except Exception as e:
+        return jsonify({"msg": "Create failed", "error": str(e)}), 500
+
+    return jsonify({"msg": "Booking created"})
+
+@app.route("/api/employee/tasks", methods=["GET"])
+def employee_tasks():
+    if session.get("role") != "employee":
+        return jsonify({"msg": "Access denied"}), 403
+
+    rows = fetchall("""
+        SELECT 
+            a.id,
+            a.project_id,
+            a.role_desc,
+            a.start_date,
+            a.end_date,
+            a.status,
+            a.created_at,
+
+            p.project_name,
+
+            b.title AS booking_title,
+            b.location AS booking_location,
+            b.start_date AS booking_start,
+            b.end_date AS booking_end
+        FROM assignments a
+        JOIN projects p ON p.id = a.project_id
+        JOIN bookings b ON b.id = p.booking_id
+        WHERE a.employee_id = %s
+        ORDER BY a.created_at DESC
+    """, (session["user_id"],))
+
+    return jsonify(rows)
+
+@app.route("/api/assignments/all", methods=["GET"])
+def admin_all_assignments():
+    rows = fetchall("""
+        SELECT 
+            a.*,
+            u.name AS employee_name,
+            p.project_name,
+            b.location AS booking_location,
+            b.title AS booking_title
+        FROM assignments a
+        LEFT JOIN users u ON u.id = a.employee_id
+        LEFT JOIN projects p ON p.id = a.project_id
+        LEFT JOIN bookings b ON b.id = p.booking_id
+        ORDER BY a.created_at DESC
+    """)
+    return jsonify(rows)
+
+@app.route("/api/admin/bookings/<int:booking_id>", methods=["PUT"])
+
+def admin_update_booking(booking_id):
+    data = request.json or {}
+
+    booking = fetchone("SELECT id FROM bookings WHERE id=%s", (booking_id,))
+    if not booking:
+        return jsonify({"msg": "Booking not found"}), 404
+
+    fields = []
+    params = []
+
+    for key in ("client_id", "title", "description", "location", "required_skills", "start_date", "end_date", "budget", "status"):
+        if key in data:
+            fields.append(f"{key}=%s")
+            params.append(data[key])
+
+    if not fields:
+        return jsonify({"msg": "No fields to update"}), 400
+
+    params.append(booking_id)
+
+    try:
+        execute(f"UPDATE bookings SET {', '.join(fields)} WHERE id=%s", tuple(params))
+    except Exception as e:
+        return jsonify({"msg": 'Update failed', "error": str(e)}), 500
+
+    return jsonify({"msg": "Booking updated"})
+
 if __name__ == "__main__":
-    # For development only; in production use proper WSGI server
+
     app.run(debug=True)
